@@ -1,101 +1,83 @@
+import os
+import librosa
 import numpy as np
-import matplotlib.pyplot as plt
-import pandas as pd
-import seaborn as sns
+from scipy import signal
 from keras.models import Sequential
-from keras.layers import TimeDistributed, Conv2D, MaxPooling2D, BatchNormalization, Dropout, Flatten, LSTM, Dense
-from keras.optimizers import Adam
-from keras.callbacks import ReduceLROnPlateau
-from sklearn.metrics import classification_report, confusion_matrix
+from keras.layers import Conv2D, MaxPooling2D, TimeDistributed, LSTM, Dense, Dropout, Flatten, BatchNormalization
+from keras.utils import to_categorical
+from sklearn.model_selection import train_test_split
+import time
 
-# Model architecture
-input_shape = x_train.shape[1:]  # Input shape based on training data
+start_time = time.time()
+
+
+def extract_features(file_path, max_pad_len=216):
+    audio, sample_rate = librosa.load(file_path, res_type='kaiser_fast')
+
+    # Apply high-pass filter for noise reduction
+    sos = signal.butter(10, 80, 'hp', fs=sample_rate, output='sos')
+    audio = signal.sosfilt(sos, audio)
+
+    # Extract MFCC and normalize
+    mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=40)
+    mfccs = (mfccs - np.min(mfccs)) / (np.max(mfccs) - np.min(mfccs))
+
+    # Pitch extraction and NaN handling
+    pitch, voiced_flag, voiced_probs = librosa.pyin(audio, fmin=librosa.note_to_hz('C2'), fmax=librosa.note_to_hz('C7'))
+    pitch = np.nan_to_num(pitch)
+    pitch = (pitch - np.min(pitch)) / (np.max(pitch) - np.min(pitch)) if np.max(pitch) != 0 else pitch
+
+    # Padding
+    pad_width = max(0, max_pad_len - mfccs.shape[1])
+    mfccs = np.pad(mfccs, pad_width=((0, 0), (0, pad_width)), mode='constant')
+    pitch = np.pad(pitch, (0, pad_width), mode='constant')
+    feature = np.concatenate((mfccs, pitch.reshape(1, -1)), axis=0)
+    return feature
+
+
+data_path = 'C:/Users/sanan/ML_Projects/Emotion_Recognition'
+X, y = [], []
+emotion_dict = {'01': 'neutral', '02': 'calm', '03': 'happy', '04': 'sad', '05': 'angry', '06': 'fearful',
+                '07': 'disgust', '08': 'surprised'}
+
+for folder in os.listdir(data_path):
+    folder_path = os.path.join(data_path, folder)
+    if os.path.isdir(folder_path):
+        for file in os.listdir(folder_path):
+            if file.endswith('.wav'):
+                emotion = emotion_dict[file.split('-')[2]]
+                feature = extract_features(os.path.join(folder_path, file))
+                X.append(feature)
+                y.append(emotion)
+
+X = np.array(X)
+y = np.array(y)
+y = to_categorical([list(emotion_dict.values()).index(em) for em in y])
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], X_train.shape[2], 1)
+X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], X_test.shape[2], 1)
+
 model = Sequential()
-
-# First CNN Layer
-model.add(TimeDistributed(Conv2D(32, (3, 3), activation='relu', padding='same'), input_shape=input_shape))
-model.add(TimeDistributed(MaxPooling2D(pool_size=(2, 2))))
+model.add(TimeDistributed(Conv2D(32, (3, 3), activation='relu', padding='same'),
+                          input_shape=(None, X_train.shape[2], X_train.shape[3], 1)))
 model.add(TimeDistributed(BatchNormalization()))
-model.add(TimeDistributed(Dropout(0.2)))
+model.add(TimeDistributed(MaxPooling2D(pool_size=(2, 1))))
 
-# Second CNN Layer
 model.add(TimeDistributed(Conv2D(64, (3, 3), activation='relu', padding='same')))
-model.add(TimeDistributed(MaxPooling2D(pool_size=(2, 2))))
 model.add(TimeDistributed(BatchNormalization()))
-model.add(TimeDistributed(Dropout(0.3)))
+model.add(TimeDistributed(MaxPooling2D(pool_size=(2, 1))))
 
-# Flattening for LSTM input
 model.add(TimeDistributed(Flatten()))
-
-# LSTM Layer
-model.add(LSTM(64, return_sequences=False))
-model.add(Dropout(0.4))
-
-# Dense Layers
+model.add(LSTM(128, return_sequences=True))
+model.add(LSTM(64))
 model.add(Dense(64, activation='relu'))
-model.add(Dropout(0.3))
+model.add(Dropout(0.5))
+model.add(Dense(y_train.shape[1], activation='softmax'))
 
-# Output Layer
-model.add(Dense(8, activation='softmax'))  # Assuming 8 emotion classes
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+history = model.fit(X_train, y_train, epochs=50, batch_size=32, validation_data=(X_test, y_test))
 
-# Model summary
-model.summary()
-
-# Compiling the model
-model.compile(optimizer=Adam(),
-              loss='categorical_crossentropy',
-              metrics=['accuracy'])
-
-# Training the model
-reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, verbose=1, patience=4, min_lr=0.0000001)
-
-epochs = 100
-history = model.fit(x_train, y_train, batch_size=128, epochs=epochs, validation_data=(x_test, y_test), callbacks=[reduce_lr])
-
-# Evaluating the model
-test_accuracy = model.evaluate(x_test, y_test)[1] * 100
-print(f"Accuracy of our model on test data: {test_accuracy:.2f}%")
-
-# Plotting accuracy and loss
-epochs_range = range(epochs)
-plt.figure(figsize=(20, 6))
-
-# Training and testing loss
-plt.subplot(1, 2, 1)
-plt.plot(epochs_range, history.history['loss'], label='Training Loss')
-plt.plot(epochs_range, history.history['val_loss'], label='Testing Loss')
-plt.title('Training & Testing Loss')
-plt.xlabel("Epochs")
-plt.legend()
-
-# Training and testing accuracy
-plt.subplot(1, 2, 2)
-plt.plot(epochs_range, history.history['accuracy'], label='Training Accuracy')
-plt.plot(epochs_range, history.history['val_accuracy'], label='Testing Accuracy')
-plt.title('Training & Testing Accuracy')
-plt.xlabel("Epochs")
-plt.legend()
-
-plt.show()
-
-# Predictions on test data
-pred_test = model.predict(x_test)
-y_pred = encoder.inverse_transform(pred_test)
-y_test = encoder.inverse_transform(y_test)
-
-# Create DataFrame for predicted and actual labels
-df = pd.DataFrame({'Predicted Labels': y_pred.flatten(), 'Actual Labels': y_test.flatten()})
-print(df.head(10))
-
-# Confusion Matrix
-cm = confusion_matrix(y_test, y_pred)
-plt.figure(figsize=(12, 10))
-cm_df = pd.DataFrame(cm, index=[i for i in encoder.categories_], columns=[i for i in encoder.categories_])
-sns.heatmap(cm_df, annot=True, fmt='', cmap='Blues', linecolor='white', linewidth=1)
-plt.title('Confusion Matrix', size=20)
-plt.xlabel('Predicted Labels', size=14)
-plt.ylabel('Actual Labels', size=14)
-plt.show()
-
-# Classification Report
-print(classification_report(y_test, y_pred))
+test_loss, test_acc = model.evaluate(X_test, y_test)
+print("Test Accuracy: ", test_acc * 100)
+print("Total Time:", time.time() - start_time)

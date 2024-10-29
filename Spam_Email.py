@@ -7,12 +7,16 @@ from sklearn.svm import SVC
 from sklearn.metrics import classification_report, accuracy_score
 from sklearn.utils.class_weight import compute_class_weight
 
-# Load dataset (assume 'emails.csv' has 'text' and 'label' columns)
-df = pd.read_csv('emails.csv')
+# Load the dataset
+# Replace 'SMSSpamCollection.txt' with the actual path to your file
+df = pd.read_csv('SMSSpamCollection.txt', sep='\t', header=None, names=['label', 'message'])
 
 # Separate data into features (X) and labels (y)
-X = df['text']
-y = df['label']
+X = df['message']  # The column with message text
+y = df['label']    # The column indicating spam/ham
+
+# Map the labels to binary values (1 for spam, 0 for ham)
+y = y.map({'ham': 0, 'spam': 1})
 
 # Split the data into training and testing sets (70% train, 30% test)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)

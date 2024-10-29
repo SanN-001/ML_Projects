@@ -1,82 +1,45 @@
-# Importing necessary libraries
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 from torchvision import transforms
+from torchvision.datasets import MNIST
+from sklearn.metrics import classification_report, confusion_matrix
+import matplotlib.pyplot as plt
 
-# Load dataset
-df = pd.read_csv('train.csv')
-
-# Split into features and labels
-X = df.drop('label', axis=1).values
-y = df['label'].values
-
-# Train-test split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# Scale data
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
-
-# Reshape for image viewing (28x28 pixels)
-X_train_img = X_train.reshape(-1, 28, 28)
-X_test_img = X_test.reshape(-1, 28, 28)
-
-# Visualize a few samples
-fig, ax = plt.subplots(2, 5, figsize=(10, 5))
-for i in range(10):
-    ax[i // 5, i % 5].imshow(X_train_img[y_train == i][0], cmap='gray')
-    ax[i // 5, i % 5].set_title(f'Class {i}')
-    ax[i // 5, i % 5].axis('off')
-plt.show()
-
-# Convert to tensors
-X_train = torch.tensor(X_train_img).unsqueeze(1).float()
-X_test = torch.tensor(X_test_img).unsqueeze(1).float()
-y_train = torch.tensor(y_train).long()
-y_test = torch.tensor(y_test).long()
-
-# Data augmentation to improve model robustness and reduce overfitting
+# Define transformations for the dataset (including normalization)
 train_transform = transforms.Compose([
-    transforms.RandomRotation(10),
-    transforms.RandomAffine(0, shear=10, scale=(0.8, 1.2)),
-    transforms.RandomHorizontalFlip(),
-    transforms.ToTensor(),
+    transforms.ToTensor(),  # Converts PIL images to tensors
+    transforms.Normalize((0.5,), (0.5,))  # Normalizes to range [-1, 1] (mean=0.5, std=0.5)
 ])
 
-# Create dataset and dataloader
-train_dataset = TensorDataset(X_train, y_train)
-test_dataset = TensorDataset(X_test, y_test)
+# Load MNIST dataset
+train_dataset = MNIST(root='./data', train=True, download=True, transform=train_transform)
+test_dataset = MNIST(root='./data', train=False, download=True, transform=train_transform)
+
+# Create DataLoaders for batching
 train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=64)
 
 
-# Define CNN model
+# Define the CNN model
 class CNN(nn.Module):
     def __init__(self):
         super(CNN, self).__init__()
-        self.conv1 = nn.Conv2d(1, 32, 3)
-        self.conv2 = nn.Conv2d(32, 64, 3)
-        self.fc1 = nn.Linear(64 * 5 * 5, 128)
-        self.fc2 = nn.Linear(128, 10)
-        self.pool = nn.MaxPool2d(2, 2)
-        self.dropout = nn.Dropout(0.25)
+        self.conv1 = nn.Conv2d(1, 32, 3)  # Convolutional Layer 1
+        self.conv2 = nn.Conv2d(32, 64, 3)  # Convolutional Layer 2
+        self.fc1 = nn.Linear(64 * 5 * 5, 128)  # Fully connected layer 1
+        self.fc2 = nn.Linear(128, 10)  # Fully connected layer 2 (output layer)
+        self.pool = nn.MaxPool2d(2, 2)  # Max pooling layer
+        self.dropout = nn.Dropout(0.25)  # Dropout layer to avoid overfitting
 
     def forward(self, x):
-        x = self.pool(torch.relu(self.conv1(x)))
-        x = self.pool(torch.relu(self.conv2(x)))
-        x = x.view(-1, 64 * 5 * 5)
-        x = torch.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = self.fc2(x)
+        x = self.pool(torch.relu(self.conv1(x)))  # Apply Conv1, ReLU, and MaxPooling
+        x = self.pool(torch.relu(self.conv2(x)))  # Apply Conv2, ReLU, and MaxPooling
+        x = x.view(-1, 64 * 5 * 5)  # Flatten the output from conv layers
+        x = torch.relu(self.fc1(x))  # Apply fully connected layer 1 with ReLU
+        x = self.dropout(x)  # Apply dropout
+        x = self.fc2(x)  # Final output layer
         return x
 
 
@@ -88,46 +51,39 @@ optimizer = optim.Adam(model.parameters(), lr=0.001)
 # Training loop
 for epoch in range(10):
     model.train()
+    running_loss = 0.0
     for X_batch, y_batch in train_loader:
-        optimizer.zero_grad()
-        output = model(X_batch)
-        loss = criterion(output, y_batch)
-        loss.backward()
-        optimizer.step()
-    print(f"Epoch {epoch + 1}/10, Loss: {loss.item():.4f}")
+        optimizer.zero_grad()  # Clear the gradients from the previous step
+        output = model(X_batch)  # Forward pass
+        loss = criterion(output, y_batch)  # Compute loss
+        loss.backward()  # Backpropagation
+        optimizer.step()  # Update weights
+        running_loss += loss.item()
 
-# Evaluation on test set
+    print(f"Epoch {epoch + 1}/10, Loss: {running_loss / len(train_loader):.4f}")
+
+# Evaluation loop
 model.eval()
 correct = 0
 total = 0
 with torch.no_grad():
     for X_batch, y_batch in test_loader:
-        output = model(X_batch)
-        _, predicted = torch.max(output, 1)
-        total += y_batch.size(0)
-        correct += (predicted == y_batch).sum().item()
+        output = model(X_batch)  # Get predictions
+        _, predicted = torch.max(output, 1)  # Convert logits to class predictions
+        total += y_batch.size(0)  # Count total samples
+        correct += (predicted == y_batch).sum().item()  # Count correct predictions
 
 accuracy = correct / total
-print(f"Accuracy: {accuracy:.4f}")
+print(f"Test Accuracy: {accuracy:.4f}")
 
-# Confusion matrix and classification report
+# Generate confusion matrix and classification report
 y_pred, y_true = [], []
 with torch.no_grad():
     for X_batch, y_batch in test_loader:
         output = model(X_batch)
         _, predicted = torch.max(output, 1)
-        y_pred.extend(predicted.numpy())
-        y_true.extend(y_batch.numpy())
+        y_pred.extend(predicted.cpu().numpy())
+        y_true.extend(y_batch.cpu().numpy())
 
 print(confusion_matrix(y_true, y_pred))
 print(classification_report(y_true, y_pred))
-
-# Save predictions on test data
-test = pd.read_csv('test.csv')
-test = scaler.transform(test)
-test_tensor = torch.tensor(test.reshape(-1, 1, 28, 28)).float()
-predictions = model(test_tensor)
-_, predictions = torch.max(predictions, 1)
-
-submission = pd.DataFrame({'ImageId': range(1, len(predictions) + 1), 'Label': predictions.numpy()})
-submission.to_csv('submission_cnn.csv', index=False)
